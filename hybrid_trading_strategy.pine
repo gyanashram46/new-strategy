@@ -1,0 +1,269 @@
+//@version=5
+strategy("Hybrid Trading Strategy - Range Expansion + Daily Bias + Unicorn Model", 
+         overlay=true, 
+         default_qty_type=strategy.percent_of_equity, 
+         default_qty_value=100,
+         commission_type=strategy.commission.percent,
+         commission_value=0.05)
+
+// ============================================================================
+// STRATEGY DESCRIPTION
+// ============================================================================
+// This is a hybrid strategy combining three trading approaches:
+// 1. RANGE EXPANSION (Casper SMC) - IRL & ERL liquidity concepts
+// 2. DAILY BIAS (STBP) - Daily directional bias and support/resistance
+// 3. UNICORN MODEL - Pattern recognition and market structure
+//
+// Entry: Confluence of signals from all three models
+// Exit: Based on risk management and pattern completion
+// ============================================================================
+
+// ============================================================================
+// INPUT PARAMETERS
+// ============================================================================
+
+// Timeframe and General Settings
+var group1 = "═══════════ GENERAL SETTINGS ═══════════"
+i_entryType = input.string("LONG_ONLY", "Trade Type", options=["LONG_ONLY", "SHORT_ONLY", "BOTH"], group=group1)
+i_useStoploss = input.bool(true, "Use Stoploss", group=group1)
+i_useTakeProfit = input.bool(true, "Use Take Profit", group=group1)
+
+// Risk Management
+var group2 = "═══════════ RISK MANAGEMENT ═══════════"
+i_riskPercent = input.float(2.0, "Risk % per Trade", minval=0.1, maxval=10, step=0.1, group=group2)
+i_rewardRatio = input.float(2.0, "Reward/Risk Ratio", minval=0.5, maxval=5, step=0.1, group=group2)
+i_maxDrawdown = input.float(10.0, "Max Drawdown %", minval=1, maxval=50, step=1, group=group2)
+
+// ============================================================================
+// STRATEGY 1: RANGE EXPANSION (Casper SMC)
+// ============================================================================
+var group3 = "═══════════ RANGE EXPANSION (SMC) ═══════════"
+
+// IRL (Internal Range Liquidity) / Fair Value Gap Detection
+i_fvgLength = input.int(5, "FVG Detection Length", minval=2, maxval=20, group=group3)
+i_irlMultiplier = input.float(1.0, "IRL Sensitivity", minval=0.5, maxval=2.0, step=0.1, group=group3)
+
+// ERL (External Range Liquidity) / Breakout Detection
+i_erlLength = input.int(20, "ERL Breakout Length", minval=5, maxval=50, group=group3)
+i_erlThreshold = input.float(0.5, "ERL Threshold %", minval=0.1, maxval=2.0, step=0.1, group=group3)
+
+// ============================================================================
+// STRATEGY 2: DAILY BIAS (STBP)
+// ============================================================================
+var group4 = "═══════════ DAILY BIAS (STBP) ═══════════"
+
+i_biasLength = input.int(14, "Bias RSI Length", minval=5, maxval=50, group=group4)
+i_biasOverbought = input.float(70, "Overbought Level", minval=50, maxval=100, group=group4)
+i_biasOversold = input.float(30, "Oversold Level", minval=0, maxval=50, group=group4)
+i_useBiasFilter = input.bool(true, "Use Daily Bias Filter", group=group4)
+
+// ============================================================================
+// STRATEGY 3: UNICORN MODEL
+// ============================================================================
+var group5 = "═══════════ UNICORN MODEL ═══════════"
+
+i_unicornLength = input.int(10, "Unicorn Pattern Length", minval=5, maxval=30, group=group5)
+i_unicornATR = input.float(1.5, "Unicorn ATR Multiplier", minval=0.5, maxval=3.0, step=0.1, group=group5)
+i_useUnicornFilter = input.bool(true, "Use Unicorn Filter", group=group5)
+
+// ============================================================================
+// CONFLUENCE SETTINGS
+// ============================================================================
+var group6 = "═══════════ CONFLUENCE FILTERS ═══════════"
+
+i_requireAllSignals = input.bool(true, "Require ALL Signals", group=group6)
+i_minConfluence = input.int(2, "Minimum Confluence Signals", minval=1, maxval=3, group=group6)
+i_showSignals = input.bool(true, "Show Signal Labels", group=group6)
+
+// ============================================================================
+// INDICATOR CALCULATIONS
+// ============================================================================
+
+// --- RSI for Daily Bias ---
+rsi = ta.rsi(close, i_biasLength)
+
+// --- ATR for volatility ---
+atr = ta.atr(14)
+
+// --- Moving Averages ---
+ma20 = ta.sma(close, 20)
+ma50 = ta.sma(close, 50)
+ma200 = ta.sma(close, 200)
+
+// ============================================================================
+// STRATEGY 1: RANGE EXPANSION SIGNALS
+// ============================================================================
+
+// Fair Value Gap (FVG) Detection - IRL
+fvgBullish = (close[2] < open[1]) and (open[0] > close[1]) and (open[0] < open[1])
+fvgBearish = (close[2] > open[1]) and (open[0] < close[1]) and (open[0] > open[1])
+
+// Breakout Detection - ERL
+highestHigh = ta.highest(high, i_erlLength)
+lowestLow = ta.lowest(low, i_erlLength)
+rangeSize = highestHigh - lowestLow
+erlLong = close > highestHigh and (close - highestHigh) / highestHigh * 100 > i_erlThreshold
+erlShort = close < lowestLow and (lowestLow - close) / lowestLow * 100 > i_erlThreshold
+
+// Range Expansion Signal
+rangeExpansionBull = erlLong or fvgBullish
+rangeExpansionBear = erlShort or fvgBearish
+
+// ============================================================================
+// STRATEGY 2: DAILY BIAS SIGNALS
+// ============================================================================
+
+// Daily Bias Direction
+dailyBiasBull = rsi > i_biasOversold and close > ma20
+dailyBiasBear = rsi < i_biasOverbought and close < ma20
+
+// Bias Confirmation
+biasConfirmBull = rsi > 50 and close > ma50
+biasConfirmBear = rsi < 50 and close < ma50
+
+// ============================================================================
+// STRATEGY 3: UNICORN MODEL SIGNALS
+// ============================================================================
+
+// Unicorn Pattern - Market Structure Analysis
+unicornBull = (close > open) and (high - close < atr * i_unicornATR) and (volume > ta.sma(volume, 20))
+unicornBear = (close < open) and (close - low < atr * i_unicornATR) and (volume > ta.sma(volume, 20))
+
+// Unicorn Trend Confirmation
+unicornTrendBull = close > ma20 and ma20 > ma50 and ma50 > ma200
+unicornTrendBear = close < ma20 and ma20 < ma50 and ma50 < ma200
+
+// ============================================================================
+// CONFLUENCE LOGIC
+// ============================================================================
+
+// Count confluencing signals
+confluenceLong = 0
+confluenceShort = 0
+
+if rangeExpansionBull
+    confluenceLong += 1
+if rangeExpansionBear
+    confluenceShort += 1
+
+if biasConfirmBull
+    confluenceLong += 1
+if biasConfirmBear
+    confluenceShort += 1
+
+if unicornTrendBull
+    confluenceLong += 1
+if unicornTrendBear
+    confluenceShort += 1
+
+// Final Entry Conditions
+entryLong = (i_requireAllSignals ? (confluenceLong >= 3) : (confluenceLong >= i_minConfluence)) and rsi < 70
+entryShort = (i_requireAllSignals ? (confluenceShort >= 3) : (confluenceShort >= i_minConfluence)) and rsi > 30
+
+// Apply trade type filter
+entryLong := entryLong and (i_entryType == "LONG_ONLY" or i_entryType == "BOTH")
+entryShort := entryShort and (i_entryType == "SHORT_ONLY" or i_entryType == "BOTH")
+
+// ============================================================================
+// STOP LOSS & TAKE PROFIT CALCULATION
+// ============================================================================
+
+var float entryPrice = 0.0
+var float stopLoss = 0.0
+var float takeProfit = 0.0
+var int positionType = 0  // 1 = long, -1 = short, 0 = no position
+
+// Calculate SL and TP based on ATR
+if entryLong
+    entryPrice := close
+    stopLoss := close - (atr * 2.0)
+    takeProfit := close + (atr * 2.0 * i_rewardRatio)
+    positionType := 1
+
+if entryShort
+    entryPrice := close
+    stopLoss := close + (atr * 2.0)
+    takeProfit := close - (atr * 2.0 * i_rewardRatio)
+    positionType := -1
+
+// Exit Conditions
+exitLong = (positionType == 1) and ((i_useStoploss and close < stopLoss) or (i_useTakeProfit and close > takeProfit))
+exitShort = (positionType == -1) and ((i_useStoploss and close > stopLoss) or (i_useTakeProfit and close < takeProfit))
+
+// ============================================================================
+// STRATEGY EXECUTION
+// ============================================================================
+
+if entryLong
+    strategy.entry("Long", strategy.long)
+    positionType := 1
+
+if entryShort
+    strategy.entry("Short", strategy.short)
+    positionType := -1
+
+if exitLong
+    strategy.close("Long")
+    positionType := 0
+
+if exitShort
+    strategy.close("Short")
+    positionType := 0
+
+// ============================================================================
+// VISUALIZATION
+// ============================================================================
+
+// Plot Moving Averages
+plot(ma20, "MA20", color=color.blue, linewidth=1)
+plot(ma50, "MA50", color=color.orange, linewidth=1)
+plot(ma200, "MA200", color=color.red, linewidth=2)
+
+// Plot Stop Loss and Take Profit
+if positionType != 0 and i_showSignals
+    plot(stopLoss, "StopLoss", color=color.red, style=plot.style_linebr, linewidth=2)
+    plot(takeProfit, "TakeProfit", color=color.green, style=plot.style_linebr, linewidth=2)
+
+// FVG Visualization
+bgcolor(fvgBullish ? color.new(color.green, 80) : na, title="FVG Bullish")
+bgcolor(fvgBearish ? color.new(color.red, 80) : na, title="FVG Bearish")
+
+// Signal Labels
+if i_showSignals
+    if entryLong
+        label.new(bar_index, high + atr, "LONG\n" + str.tostring(confluenceLong) + " Signals", 
+                  color=color.green, style=label.style_label_down, textcolor=color.white)
+    
+    if entryShort
+        label.new(bar_index, low - atr, "SHORT\n" + str.tostring(confluenceShort) + " Signals", 
+                  color=color.red, style=label.style_label_up, textcolor=color.white)
+
+// Alert Conditions
+alertmessage_long = "LONG SIGNAL: Range Expansion + Daily Bias + Unicorn Model Confluence"
+alertmessage_short = "SHORT SIGNAL: Range Expansion + Daily Bias + Unicorn Model Confluence"
+
+if entryLong
+    alert(alertmessage_long, alert.freq_once_per_bar)
+
+if entryShort
+    alert(alertmessage_short, alert.freq_once_per_bar)
+
+// ============================================================================
+// PERFORMANCE TRACKING
+// ============================================================================
+
+var float cumPnL = 0.0
+var int totalTrades = 0
+
+if strategy.closedtrades > 0
+    cumPnL := strategy.netprofit
+    totalTrades := strategy.closedtrades
+
+// Display Stats
+f_stats() =>
+    winrate = (strategy.wontrades / strategy.closedtrades) * 100
+    str.tostring(winrate, "Win Rate: #.##%")
+
+// ============================================================================
+// END OF STRATEGY
+// ============================================================================
